@@ -1,5 +1,12 @@
 require("dotenv").config();
-const { Client, GatewayIntentBits, EmbedBuilder } = require("discord.js");
+const {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} = require("discord.js");
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
@@ -13,6 +20,7 @@ client.on("guildMemberAdd", async (member) => {
 
   const embed = new EmbedBuilder()
     .setTitle("🛒 Dinobux Official Store")
+    .setURL(process.env.FACEBOOK_URL) // ✅ กดหัวข้อแล้วไป Facebook
     .setDescription(
       `🦖 Welcome ${member} to Dinobux!\n\n` +
       `ร้านจำหน่าย Robux สำหรับเกม Roblox\n` +
@@ -26,7 +34,14 @@ client.on("guildMemberAdd", async (member) => {
     .setThumbnail(process.env.THUMBNAIL_URL)
     .setImage(process.env.IMAGE_URL);
 
-  await channel.send({ embeds: [embed] });
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel("เข้า Facebook ร้าน Dinobux")
+      .setStyle(ButtonStyle.Link)
+      .setURL(process.env.FACEBOOK_URL)
+  );
+
+  await channel.send({ embeds: [embed], components: [row] });
 });
 
 client.login(process.env.DISCORD_TOKEN);
