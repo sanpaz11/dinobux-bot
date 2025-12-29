@@ -9,98 +9,92 @@ const {
   Events,
 } = require("discord.js");
 
+const ROLE_CHANNEL_ID = "1455150392278257725";
+const ROLE_ID = "1455179147839279215";
+
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-const prefix = "!";
-
-client.once("ready", () => {
+client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-});
 
-// ✅ Welcome
-client.on("guildMemberAdd", async (member) => {
-  const channel = member.guild.channels.cache.get(process.env.WELCOME_CHANNEL_ID);
-  if (!channel) return;
+  try {
+    for (const [, guild] of client.guilds.cache) {
+      const channel = guild.channels.cache.get(ROLE_CHANNEL_ID);
+      if (!channel || !channel.isTextBased()) continue;
 
-  const facebookUrl = process.env.FACEBOOK_URL || "https://discord.com";
+      // 🔎 เช็คว่ามีข้อความรับยศอยู่แล้วไหม (50 ข้อความล่าสุด)
+      const messages = await channel.messages.fetch({ limit: 50 });
+      const alreadyExists = messages.some(
+        (m) =>
+          m.author.id === client.user.id &&
+          m.components.length > 0 &&
+          m.components[0].components.some(
+            (c) => c.customId === "claim_role"
+          )
+      );
 
-  const embed = new EmbedBuilder()
-    .setTitle("🛒 Dinobux Official Store")
-    .setURL(facebookUrl) // กันพังถ้าไม่มีค่า
-    .setDescription(
-      `🦖 Welcome ${member} to Dinobux!\n\n` +
-        `ร้านจำหน่าย Robux สำหรับเกม Roblox\n` +
-        `✓ ราคาดี\n` +
-        `✓ ปลอดภัย 100%\n` +
-        `✓ ส่งไว / มีแอดมินดูแล\n\n` +
-        `📌 ไปที่ห้อง <#${process.env.ROLE_CHANNEL_ID || process.env.WELCOME_CHANNEL_ID}> เพื่อกดรับยศ`
-    )
-    .setColor(0x22c55e)
-    .setThumbnail(process.env.THUMBNAIL_URL || null)
-    .setImage(process.env.IMAGE_URL || null);
+      if (alreadyExists) {
+        console.log("ℹ️ พบข้อความรับยศแล้ว → ไม่ส่งซ้ำ");
+        continue;
+      }
 
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setLabel("เข้า Facebook ร้าน Dinobux")
-      .setStyle(ButtonStyle.Link)
-      .setURL(facebookUrl)
-  );
+      // ✨ ส่งข้อความรับยศ
+      const embed = new EmbedBuilder()
+        .setTitle("✅ รับยศสมาชิก")
+        .setDescription(
+          "กดปุ่มด้านล่างเพื่อรับยศเข้าใช้งานเซิร์ฟเวอร์\n\n" +
+          "หากกดแล้วไม่ขึ้น โปรดแจ้งแอดมิน"
+        )
+        .setColor(0x22c55e);
 
-  await channel.send({ embeds: [embed], components: [row] });
-});
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("claim_role")
+          .setLabel("รับยศ")
+          .setStyle(ButtonStyle.Success)
+      );
 
-// ✅ คำสั่งวางปุ่มรับยศในห้อง #รับยศ
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot) return;
-  if (!message.guild) return;
-
-  if (message.content === `${prefix}setup-role`) {
-    // จำกัดให้ใช้เฉพาะห้องที่กำหนด
-    if (message.channel.id !== process.env.ROLE_CHANNEL_ID) {
-      return message.reply("ไปพิมพ์คำสั่งนี้ในห้อง #รับยศ เท่านั้นนะ");
+      await channel.send({ embeds: [embed], components: [row] });
+      console.log("✅ ส่งปุ่มรับยศอัตโนมัติเรียบร้อย");
     }
-
-    const embed = new EmbedBuilder()
-      .setTitle("✅ กดรับยศเพื่อเข้าใช้งานเซิร์ฟเวอร์")
-      .setDescription("กดปุ่มด้านล่างเพื่อรับยศสมาชิก")
-      .setColor(0x22c55e);
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("claim_role")
-        .setLabel("รับยศ")
-        .setStyle(ButtonStyle.Success)
-    );
-
-    await message.channel.send({ embeds: [embed], components: [row] });
-    return message.reply("วางปุ่มรับยศเรียบร้อย ✅");
+  } catch (e) {
+    console.log("❌ Auto role error:", e);
   }
 });
 
-// ✅ ตอนกดปุ่ม “รับยศ”
+// 👉 ตอนกดปุ่ม
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
   if (interaction.customId !== "claim_role") return;
 
-  const role = interaction.guild.roles.cache.get(process.env.ROLE_ID);
+  const role = interaction.guild.roles.cache.get(ROLE_ID);
   if (!role) {
-    return interaction.reply({ content: "หา Role ไม่เจอ (เช็ค ROLE_ID)", ephemeral: true });
+    return interaction.reply({
+      content: "❌ ไม่พบ Role (ติดต่อแอดมิน)",
+      ephemeral: true,
+    });
   }
 
-  if (interaction.member.roles.cache.has(role.id)) {
-    return interaction.reply({ content: "คุณมียศนี้อยู่แล้ว ✅", ephemeral: true });
+  if (interaction.member.roles.cache.has(ROLE_ID)) {
+    return interaction.reply({
+      content: "คุณมียศนี้อยู่แล้ว ✅",
+      ephemeral: true,
+    });
   }
 
   try {
-    await interaction.member.roles.add(role, "User claimed role");
-    return interaction.reply({ content: `รับยศเรียบร้อย! ได้ยศ: ${role}`, ephemeral: true });
+    await interaction.member.roles.add(role, "Auto role button");
+    await interaction.reply({
+      content: `🎉 รับยศเรียบร้อย: ${role}`,
+      ephemeral: true,
+    });
   } catch (e) {
-    return interaction.reply({
+    await interaction.reply({
       content:
-        "บอทเพิ่มยศไม่ได้ ❌\n" +
-        "เช็ค: 1) บอทมีสิทธิ์ Manage Roles 2) ยศบอทอยู่สูงกว่า ROLE_ID",
+        "❌ บอทเพิ่มยศไม่ได้\n" +
+        "ตรวจสอบ: Role บอทต้องสูงกว่า Role สมาชิก",
       ephemeral: true,
     });
   }
