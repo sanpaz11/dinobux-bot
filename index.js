@@ -1,4 +1,5 @@
 require("dotenv").config();
+const crypto = require("crypto");
 const {
   Client,
   GatewayIntentBits,
@@ -25,105 +26,180 @@ const THUMBNAIL_URL = process.env.THUMBNAIL_URL || null;
 
 const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID;
 
-const ROLE_CHANNEL_ID = process.env.ROLE_CHANNEL_ID; // 1455150392278257725
-const ROLE_ID = process.env.ROLE_ID;                 // 1455179147839279215
+const ROLE_CHANNEL_ID = process.env.ROLE_CHANNEL_ID; // ห้องรับยศ
+const ROLE_ID = process.env.ROLE_ID;                 // ยศที่จะให้
 
-const VERIFY_CODE_RAW = process.env.VERIFY_CODE || "dinobux";
-const VERIFY_CODE = VERIFY_CODE_RAW.trim().toLowerCase();
+// ห้อง log (เพิ่มใหม่)
+const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 
-// ใส่ FORCE_POST=1 ใน Render ชั่วคราวเพื่อบังคับโพสต์
+// ✅ โค้ดรายวัน dinobux-#### (แนะนำให้ใช้)
+const VERIFY_BASE = (process.env.VERIFY_BASE || "dinobux").trim();
+const VERIFY_SECRET = (process.env.VERIFY_SECRET || "").trim();
+const VERIFY_TZ = (process.env.VERIFY_TZ || "Asia/Bangkok").trim();
+
+// ใส่ FORCE_POST=1 เฉพาะตอนอยาก “บังคับโพสต์ใหม่”
 const FORCE_POST = String(process.env.FORCE_POST || "0") === "1";
 
 const normalize = (s) => (s || "").trim().toLowerCase();
 
-// ===== ส่งข้อความ Verification อัตโนมัติ (กันส่งซ้ำ/บังคับส่งได้) =====
-async function postVerifyMessageIfNeeded(guild) {
-  console.log(`➡️ [AutoPost] Guild: ${guild.name}`);
+function ymdInTimeZone(timeZone) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const y = parts.find((p) => p.type === "year")?.value;
+    const m = parts.find((p) => p.type === "month")?.value;
+    const d = parts.find((p) => p.type === "day")?.value;
+    if (y && m && d) return `${y}-${m}-${d}`;
+  } catch (_) {}
 
-  if (!ROLE_CHANNEL_ID || !ROLE_ID) {
-    console.log("❌ [AutoPost] Missing ROLE_CHANNEL_ID / ROLE_ID", {
-      ROLE_CHANNEL_ID,
-      ROLE_ID,
-    });
-    return;
-  }
+  // fallback UTC+7
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  const bkk = new Date(utc + 7 * 3600000);
+  const y = bkk.getUTCFullYear();
+  const m = String(bkk.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(bkk.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
 
-  // ✅ สำคัญ: ใช้ fetch เพื่อกันกรณี cache ไม่มี / บอทมองไม่เห็น
-  const channel = await guild.channels.fetch(ROLE_CHANNEL_ID).catch(() => null);
+function getDailyVerifyPhrase() {
+  // ถ้าไม่ตั้ง secret -> fallback เป็นคำตายตัว (ไม่แนะนำ)
+  if (!VERIFY_SECRET) return VERIFY_BASE.toLowerCase();
 
-  if (!channel) {
-    console.log("❌ [AutoPost] ไม่เจอห้อง หรือบอทมองไม่เห็นห้อง:", ROLE_CHANNEL_ID);
-    return;
-  }
+  const dayKey = ymdInTimeZone(VERIFY_TZ);
+  const h = crypto
+    .createHmac("sha256", VERIFY_SECRET)
+    .update(`${VERIFY_BASE}|${dayKey}`)
+    .digest("hex");
 
-  if (!channel.isTextBased()) {
-    console.log("❌ [AutoPost] ROLE_CHANNEL_ID ไม่ใช่ text channel:", ROLE_CHANNEL_ID);
-    return;
-  }
+  const num = parseInt(h.slice(0, 8), 16) % 10000;
+  const code4 = String(num).padStart(4, "0");
+  return `${VERIFY_BASE}-${code4}`.toLowerCase();
+}
 
-  console.log("✅ [AutoPost] Found role channel:", channel.name);
-
-  // กันส่งซ้ำ (ยกเว้น FORCE_POST=1)
-  if (!FORCE_POST) {
-    const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
-
-    if (!messages) {
-      console.log("❌ [AutoPost] อ่านประวัติข้อความไม่ได้ (ขาด Read Message History?)");
-      return;
-    }
-
-    const alreadyExists = messages.some(
-      (m) =>
-        m.author?.id === client.user.id &&
-        m.components?.length > 0 &&
-        m.components.some((row) =>
-          row.components.some((c) => c.customId === "dinobux_verify_btn")
-        )
-    );
-
-    console.log("ℹ️ [AutoPost] alreadyExists =", alreadyExists);
-
-    if (alreadyExists) {
-      console.log("✅ [AutoPost] Skip (มีข้อความ verify อยู่แล้ว)");
-      return;
-    }
-  } else {
-    console.log("⚠️ [AutoPost] FORCE_POST=1 → จะโพสต์ใหม่ทุกครั้งที่รีสตาร์ท");
-  }
-
+function buildVerifyEmbed(verifyPhrase) {
   const embed = new EmbedBuilder()
     .setTitle("🦖 DINOBUX VERIFICATION")
     .setDescription(
       "กดปุ่มด้านล่างเพื่อ **ยืนยันตัวตน** และรับยศเข้าใช้งานเซิร์ฟเวอร์ ✅\n\n" +
-        `📌 กรุณาพิมพ์คำว่า: **${VERIFY_CODE_RAW}**`
+        `📌 กรุณาพิมพ์คำว่า: **${verifyPhrase}**`
     )
     .setColor(0x22c55e);
 
   if (THUMBNAIL_URL) embed.setThumbnail(THUMBNAIL_URL);
   if (IMAGE_URL) embed.setImage(IMAGE_URL);
 
-  const row = new ActionRowBuilder().addComponents(
+  return embed;
+}
+
+function buildVerifyRow() {
+  return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("dinobux_verify_btn")
       .setLabel("กดยืนยันตัวตน")
       .setStyle(ButtonStyle.Success)
   );
+}
 
-  await channel.send({ embeds: [embed], components: [row] });
-  console.log("✅ [AutoPost] Posted verification message!");
+// ===== LOG เมื่อยืนยันสำเร็จ =====
+async function sendVerifyLog(guild, member, typedText, role) {
+  if (!LOG_CHANNEL_ID) return;
+
+  const logChannel = await guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  if (!logChannel || !logChannel.isTextBased()) return;
+
+  const embed = new EmbedBuilder()
+    .setTitle("✅ VERIFICATION SUCCESSFUL !!")
+    .setColor(0x22c55e)
+    .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+    .setDescription(
+      `✅ ยืนยันสำเร็จ : ${member}\n\n` +
+        `📝 การยืนยันตัวตนที่พิมพ์เข้ามา : \`${typedText}\`\n\n` +
+        `🔎 ยศที่ได้รับ : ${role}`
+    )
+    .setTimestamp();
+
+  await logChannel.send({ embeds: [embed] });
+}
+
+// ===== ส่ง/แก้ไขข้อความ Verification อัตโนมัติ (ไม่สแปม) =====
+async function upsertVerifyMessage(guild) {
+  console.log(`➡️ [VerifyUpsert] Guild: ${guild.name}`);
+
+  if (!ROLE_CHANNEL_ID || !ROLE_ID) {
+    console.log("❌ [VerifyUpsert] Missing ROLE_CHANNEL_ID / ROLE_ID");
+    return;
+  }
+
+  const channel = await guild.channels.fetch(ROLE_CHANNEL_ID).catch(() => null);
+  if (!channel) {
+    console.log("❌ [VerifyUpsert] ไม่เจอห้อง หรือบอทมองไม่เห็นห้อง:", ROLE_CHANNEL_ID);
+    return;
+  }
+  if (!channel.isTextBased()) {
+    console.log("❌ [VerifyUpsert] ROLE_CHANNEL_ID ไม่ใช่ text channel:", ROLE_CHANNEL_ID);
+    return;
+  }
+
+  const verifyPhrase = getDailyVerifyPhrase();
+  console.log("🔐 [VerifyUpsert] Today code =", verifyPhrase);
+
+  const embed = buildVerifyEmbed(verifyPhrase);
+  const row = buildVerifyRow();
+
+  // บังคับโพสต์ (ถ้าต้องการ)
+  if (FORCE_POST) {
+    await channel.send({ embeds: [embed], components: [row] });
+    console.log("⚠️ [VerifyUpsert] FORCE_POST=1 → Posted new message");
+    return;
+  }
+
+  // หาโพสต์เดิมของบอทแล้วแก้ไข
+  const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+  if (!messages) {
+    console.log("❌ [VerifyUpsert] อ่านประวัติข้อความไม่ได้ (ขาด Read Message History?)");
+    return;
+  }
+
+  const existing = messages.find(
+    (m) =>
+      m.author?.id === client.user.id &&
+      m.components?.length > 0 &&
+      m.components.some((r) =>
+        r.components.some((c) => c.customId === "dinobux_verify_btn")
+      )
+  );
+
+  if (existing) {
+    await existing.edit({ embeds: [embed], components: [row] });
+    console.log("✅ [VerifyUpsert] Updated existing verify message");
+  } else {
+    await channel.send({ embeds: [embed], components: [row] });
+    console.log("✅ [VerifyUpsert] Posted new verify message");
+  }
 }
 
 // ===== READY =====
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  // โพสต์ verify อัตโนมัติทุก guild ที่บอทอยู่
   try {
     for (const [, guild] of client.guilds.cache) {
-      await postVerifyMessageIfNeeded(guild);
+      await upsertVerifyMessage(guild);
     }
+
+    // อัปเดตทุกชั่วโมง เผื่อข้ามวันจะเปลี่ยนรหัสเอง
+    setInterval(async () => {
+      for (const [, guild] of client.guilds.cache) {
+        await upsertVerifyMessage(guild);
+      }
+    }, 60 * 60 * 1000);
   } catch (e) {
-    console.log("❌ [AutoPost] Error:", e);
+    console.log("❌ [VerifyUpsert] Error:", e);
   }
 });
 
@@ -164,20 +240,22 @@ client.on("guildMemberAdd", async (member) => {
   }
 });
 
-// ===== INTERACTIONS: ปุ่ม → modal, modal → ตรวจคำ → ให้ role =====
+// ===== INTERACTIONS: ปุ่ม → modal, modal → ตรวจคำ → ให้ role + log =====
 client.on(Events.InteractionCreate, async (interaction) => {
   // กดปุ่ม → เปิด modal
   if (interaction.isButton() && interaction.customId === "dinobux_verify_btn") {
+    const verifyPhrase = getDailyVerifyPhrase();
+
     const modal = new ModalBuilder()
       .setCustomId("dinobux_verify_modal")
       .setTitle("กรอกข้อมูลให้ถูกต้อง");
 
     const input = new TextInputBuilder()
       .setCustomId("dinobux_verify_input")
-      .setLabel(`พิมพ์คำว่า: ${VERIFY_CODE_RAW}`)
+      .setLabel(`พิมพ์คำว่า: ${verifyPhrase}`)
       .setStyle(TextInputStyle.Short)
       .setRequired(true)
-      .setPlaceholder(VERIFY_CODE_RAW);
+      .setPlaceholder(verifyPhrase);
 
     modal.addComponents(new ActionRowBuilder().addComponents(input));
     return interaction.showModal(modal);
@@ -185,10 +263,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // ส่ง modal → ตรวจคำ → ให้ role
   if (interaction.isModalSubmit() && interaction.customId === "dinobux_verify_modal") {
-    const text = interaction.fields.getTextInputValue("dinobux_verify_input");
-    const userInput = normalize(text);
+    const typed = interaction.fields.getTextInputValue("dinobux_verify_input");
+    const userInput = normalize(typed);
+    const verifyPhrase = getDailyVerifyPhrase();
 
-    if (userInput !== VERIFY_CODE) {
+    if (userInput !== verifyPhrase) {
       return interaction.reply({ content: "❌ คำไม่ถูกต้อง ลองใหม่อีกครั้ง", ephemeral: true });
     }
 
@@ -203,6 +282,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     try {
       await interaction.member.roles.add(role, "Dinobux verification passed");
+
+      // ✅ ส่ง log หลังเพิ่มยศสำเร็จ
+      await sendVerifyLog(interaction.guild, interaction.member, typed, role);
+
       return interaction.reply({ content: `✅ ยืนยันสำเร็จ! ได้รับยศ: ${role}`, ephemeral: true });
     } catch (e) {
       return interaction.reply({
