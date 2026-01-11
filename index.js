@@ -120,7 +120,6 @@ function buildVerifyEmbed(verifyPhrase) {
     .setTitle("🦖 DINOBUX VERIFICATION")
     .setDescription(
       "กดปุ่มด้านล่างเพื่อ **ยืนยันตัวตน** และรับยศเข้าใช้งานเซิร์ฟเวอร์ ✅\n\n" +
-        `📌 อย่าลืมอ่านวิธีการซื้อกันละพวกDinosaur` +
     )
     .setColor(0x22c55e);
 
@@ -347,5 +346,3 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 client.login(DISCORD_TOKEN);
-
-
